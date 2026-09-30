@@ -1,0 +1,64 @@
+# ============================================================
+# Configuración del Laboratorio (todo con dinero ficticio)
+# ============================================================
+
+general:
+  semilla: 42                 # Misma semilla = mismos resultados
+  ruta_datos: data            # Carpeta de Parquet y SQLite
+  ruta_informes: informes
+  nucleos: -1                 # -1 = usar todos los núcleos del ordenador
+
+datos:
+  fuente: binance             # binance | sintetico
+  activos: [BTC/USDT, ETH/USDT, SOL/USDT, BNB/USDT, XRP/USDT]
+  temporalidades: [1h, 1d]    # También admite 4h
+  desde: "2020-01-01"
+  hasta: null                 # null = hasta hoy
+  salto_anomalo: 0.35         # |rentabilidad de una vela| mayor que esto se reporta como salto anómalo
+
+backtest:
+  capital_inicial: 1000.0     # Euros ficticios
+  comision: 0.001             # 0,1 % por operación (entrada y salida)
+  slippage: 0.0005            # 0,05 % de deslizamiento por ejecución
+  precio_ejecucion: apertura  # La señal de la vela t se ejecuta en la apertura de t+1
+
+experimento:
+  temporalidad: 1d
+  activos: [BTC/USDT, ETH/USDT, SOL/USDT, BNB/USDT, XRP/USDT]
+  max_estrategias: 5000       # Combinaciones de parámetros (cada una se prueba en cada activo)
+  familias: [cruce_medias, rsi_reversion, ruptura_donchian]
+  proporcion_train: 0.6
+  n_aleatorias: 200           # Estrategias aleatorias de control por activo
+  top_finalistas: 10          # Cuántas pasan al agente crítico
+
+# Espacios de parámetros por familia (mín, máx, paso)
+parametros:
+  cruce_medias:
+    tipo_media: [sma, ema]
+    rapida: [5, 50, 1]
+    lenta: [20, 250, 5]
+  rsi_reversion:
+    periodo: [5, 30, 1]
+    compra: [15, 40, 1]
+    venta: [60, 85, 1]
+  ruptura_donchian:
+    entrada: [10, 100, 1]
+    salida: [5, 50, 1]
+
+veredicto:
+  min_operaciones: 30             # Menos operaciones = sin significancia → DESCARTADA
+  max_degradacion_sharpe: 0.5     # El Sharpe de test debe conservar al menos el 50 % del de train
+  percentil_aleatorias: 95        # Debe superar al percentil 95 de las estrategias aleatorias
+  exigir_validacion_completa: true  # Sin walk-forward/Monte Carlo/múltiples pruebas (Fase 2) nada pasa de SOSPECHOSA
+
+agentes:
+  activado: true
+  modelo: claude-opus-5-5
+  esfuerzo: medium                # low | medium | high
+  max_tokens: 4000
+  concurrencia: 3
+  max_llamadas_por_experimento: 20
+  max_tokens_por_experimento: 200000
+  precio_entrada_millon: 4.0      # $ por millón de tokens de entrada (para estimar coste)
+  precio_salida_millon: 20.0
+  usar_fallbacks: true            # Si el modelo rechaza la petición, la API reintenta con otro modelo
