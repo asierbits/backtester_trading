@@ -6,8 +6,8 @@ Los datos se guardan en Parquet: data/mercado/<fuente>/<ACTIVO>_<temporalidad>.p
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -37,10 +37,20 @@ def cargar(activo: str, temporalidad: str, fuente: str) -> pd.DataFrame:
     """Carga velas guardadas. Lanza FileNotFoundError si no existen."""
     ruta = ruta_parquet(activo, temporalidad, fuente)
     if not ruta.exists():
-        raise FileNotFoundError(
-            f"No hay datos de {activo} {temporalidad} ({fuente}). Descárgalos en la página Datos."
-        )
+        raise FileNotFoundError(f"No hay datos de {activo} {temporalidad} ({fuente}). Descárgalos en la página Datos.")
     return pd.read_parquet(ruta)
+
+
+def cargar_o_generar(activo: str, temporalidad: str, fuente: str, semilla: int = 42) -> pd.DataFrame:
+    """Carga los datos; si la fuente es 'sintetico' y no existen, los genera al vuelo."""
+    try:
+        return cargar(activo, temporalidad, fuente)
+    except FileNotFoundError:
+        if fuente != "sintetico":
+            raise
+        d = cargar_config()["datos"]
+        crear_sinteticos(activo, temporalidad, d["desde"], d["hasta"], semilla)
+        return cargar(activo, temporalidad, fuente)
 
 
 def _guardar(df: pd.DataFrame, activo: str, temporalidad: str, fuente: str) -> dict:
@@ -71,9 +81,7 @@ def descargar_binance(
     bolsa = ccxt.binance({"enableRateLimit": True})
     paso = MS_POR_VELA[temporalidad]
     inicio_ms = int(pd.Timestamp(desde, tz="UTC").timestamp() * 1000)
-    fin_ms = int(
-        (pd.Timestamp(hasta, tz="UTC") if hasta else pd.Timestamp.now(tz="UTC")).timestamp() * 1000
-    )
+    fin_ms = int((pd.Timestamp(hasta, tz="UTC") if hasta else pd.Timestamp.now(tz="UTC")).timestamp() * 1000)
 
     ruta = ruta_parquet(activo, temporalidad, "binance")
     previo = pd.read_parquet(ruta) if ruta.exists() else pd.DataFrame()
@@ -128,9 +136,7 @@ def _combinar(previo: pd.DataFrame, filas: list[list]) -> pd.DataFrame:
     """Une lo ya guardado con lo nuevo, sin duplicados."""
     if not filas:
         return previo
-    nuevo = normalizar(
-        pd.DataFrame(filas, columns=["timestamp", "open", "high", "low", "close", "volume"])
-    )
+    nuevo = normalizar(pd.DataFrame(filas, columns=["timestamp", "open", "high", "low", "close", "volume"]))
     todo = pd.concat([previo, nuevo]) if len(previo) else nuevo
     return todo[~todo.index.duplicated(keep="last")].sort_index()
 
@@ -196,6 +202,54 @@ def crear_sinteticos(
     return _guardar(df, activo, temporalidad, "sintetico")
 
 
+# ------------------------------------------------------------------ Acciones (yfinance)
+def descargar_yfinance(
+    ticker: str,
+    temporalidad: str,
+    desde: str = "2020-01-01",
+    hasta: str | None = None,
+) -> dict:
+    """Descarga acciones/ETF con yfinance (fuente 'yfinance').
+
+    Limitaciones de Yahoo: las velas horarias solo existen para los últimos ~730 días,
+    y no hay velas de 4h (se construyen agregando las horarias). Las acciones solo
+    cotizan en horario de mercado, así que no hay velas nocturnas ni de fin de semana
+    (el informe de calidad las contará como 'faltantes' en temporalidades intradía).
+    """
+    import yfinance as yf  # Importación diferida
+
+    intervalo = {"1h": "1h", "4h": "1h", "1d": "1d"}[temporalidad]
+    inicio = pd.Timestamp(desde, tz="UTC")
+    if intervalo == "1h":
+        limite = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=729)
+        if inicio < limite:
+            log.warning("Yahoo solo da velas horarias de los últimos 730 días: se recorta el inicio")
+            inicio = limite
+    crudo = yf.download(
+        ticker,
+        start=inicio.strftime("%Y-%m-%d"),
+        end=hasta,
+        interval=intervalo,
+        auto_adjust=True,
+        progress=False,
+        multi_level_index=False,
+    )
+    if crudo is None or crudo.empty:
+        raise ValueError(f"Yahoo no devolvió datos para {ticker} {temporalidad}")
+    crudo.columns = [str(c).lower() for c in crudo.columns]
+    crudo.index.name = "timestamp"
+    df = normalizar(crudo)
+    if temporalidad == "4h":
+        df = (
+            df.resample("4h")
+            .agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"})
+            .dropna()
+        )
+    informe = _guardar(df, ticker, temporalidad, "yfinance")
+    log.info("%s %s (yfinance): %s velas", ticker, temporalidad, informe["velas_finales"])
+    return informe
+
+
 # ------------------------------------------------------------------ CSV propio
 def importar_csv(archivo, activo: str, temporalidad: str) -> dict:
     """Importa un CSV con columnas timestamp, open, high, low, close, volume (fuente 'csv')."""
@@ -208,17 +262,18 @@ def descargar_todo(fuente: str, progreso: Progreso | None = None) -> dict[str, d
     """Descarga (o genera) todos los activos y temporalidades de config.yaml."""
     cfg = cargar_config()
     d = cfg["datos"]
-    pares = [(a, t) for a in d["activos"] for t in d["temporalidades"]]
+    activos = d.get("acciones", []) if fuente == "yfinance" else d["activos"]
+    pares = [(a, t) for a in activos for t in d["temporalidades"]]
     informes = {}
     for i, (activo, tf) in enumerate(pares):
         if progreso:
             progreso(i / len(pares), f"{activo} {tf}")
         if fuente == "binance":
             informes[f"{activo} {tf}"] = descargar_binance(activo, tf, d["desde"], d["hasta"])
+        elif fuente == "yfinance":
+            informes[f"{activo} {tf}"] = descargar_yfinance(activo, tf, d["desde"], d["hasta"])
         else:
-            informes[f"{activo} {tf}"] = crear_sinteticos(
-                activo, tf, d["desde"], d["hasta"], cfg["general"]["semilla"]
-            )
+            informes[f"{activo} {tf}"] = crear_sinteticos(activo, tf, d["desde"], d["hasta"], cfg["general"]["semilla"])
     if progreso:
         progreso(1.0, "Terminado")
     return informes
@@ -228,7 +283,7 @@ if __name__ == "__main__":
     import argparse
 
     p = argparse.ArgumentParser(description="Descarga los datos definidos en config.yaml")
-    p.add_argument("--fuente", choices=["binance", "sintetico"], default="binance")
+    p.add_argument("--fuente", choices=["binance", "sintetico", "yfinance"], default="binance")
     args = p.parse_args()
     for clave, inf in descargar_todo(args.fuente).items():
         print(f"{clave}: {inf['velas_finales']} velas, {inf['velas_faltantes']} faltantes")

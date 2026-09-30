@@ -1,0 +1,23 @@
+[project]
+name = "laboratorio"
+version = "0.3.0"
+description = "Laboratorio de estrategias de trading con dinero ficticio (módulo 1 de una app personal modular)"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = [".venv", "data", "informes"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E741", "B905"]
+
+[tool.ruff.lint.per-file-ignores]
+"modulos/trading/paginas/*.py" = ["E402", "E501"]
+"modulos/trading/informes.py" = ["E501"]
+"modulos/trading/graficas.py" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

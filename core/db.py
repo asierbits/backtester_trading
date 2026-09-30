@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import pandas as pd
 
@@ -27,6 +28,7 @@ CREATE TABLE IF NOT EXISTS experimentos (
     semilla INTEGER NOT NULL,
     n_combinaciones INTEGER DEFAULT 0,
     n_estrategias INTEGER DEFAULT 0,
+    espacio_total INTEGER DEFAULT 0,
     estado TEXT DEFAULT 'en_curso',
     duracion_s REAL,
     resumen_json TEXT
@@ -39,7 +41,9 @@ CREATE TABLE IF NOT EXISTS estrategias (
     parametros_json TEXT NOT NULL,
     hash TEXT NOT NULL,
     activo TEXT NOT NULL,
-    temporalidad TEXT NOT NULL
+    temporalidad TEXT NOT NULL,
+    finalista INTEGER DEFAULT 0,
+    rango_train INTEGER
 );
 CREATE INDEX IF NOT EXISTS ix_estrategias_exp ON estrategias(experimento_id);
 
@@ -59,7 +63,8 @@ CREATE TABLE IF NOT EXISTS operaciones (
     tramo TEXT NOT NULL,
     entrada TEXT, salida TEXT,
     precio_entrada REAL, precio_salida REAL,
-    comision REAL, resultado REAL, resultado_pct REAL, duracion_velas INTEGER
+    comision REAL, resultado REAL, resultado_pct REAL, duracion_velas INTEGER,
+    direccion INTEGER DEFAULT 1, abierta INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS ix_operaciones_est ON operaciones(estrategia_id);
 
@@ -108,6 +113,35 @@ CREATE TABLE IF NOT EXISTS cache_llm (
     creado TEXT
 );
 
+CREATE TABLE IF NOT EXISTS paper_estrategias (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    estrategia_id INTEGER,
+    nombre TEXT NOT NULL,
+    familia TEXT NOT NULL,
+    parametros_json TEXT NOT NULL,
+    activo TEXT NOT NULL,
+    temporalidad TEXT NOT NULL,
+    fuente TEXT NOT NULL,
+    capital REAL NOT NULL,
+    creado TEXT NOT NULL,
+    inicio TEXT NOT NULL,          -- primera vela que cuenta para el paper trading
+    activa INTEGER DEFAULT 1,
+    ultima_actualizacion TEXT,
+    esperado_json TEXT,            -- lo que predijo el backtest (métricas de test)
+    estado_json TEXT               -- posición actual, equity, etc.
+);
+
+CREATE TABLE IF NOT EXISTS paper_operaciones (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    paper_id INTEGER NOT NULL REFERENCES paper_estrategias(id) ON DELETE CASCADE,
+    entrada TEXT, salida TEXT,
+    precio_entrada REAL, precio_salida REAL,
+    direccion INTEGER, comision REAL, resultado REAL, resultado_pct REAL,
+    abierta INTEGER DEFAULT 0,
+    alertada INTEGER DEFAULT 0,
+    UNIQUE (paper_id, entrada)
+);
+
 CREATE TABLE IF NOT EXISTS datos_meta (
     activo TEXT NOT NULL,
     temporalidad TEXT NOT NULL,
@@ -129,7 +163,7 @@ def ruta_db() -> Path:
 
 def ahora() -> str:
     """Fecha y hora actual en UTC, formato ISO."""
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 @contextmanager
@@ -178,22 +212,34 @@ def crear_experimento(nombre: str, config: dict, semilla: int) -> int:
 
 
 def cerrar_experimento(
-    experimento_id: int, estado: str, duracion_s: float, resumen: dict, n_comb: int, n_est: int
+    experimento_id: int,
+    estado: str,
+    duracion_s: float,
+    resumen: dict,
+    n_comb: int,
+    n_est: int,
+    espacio_total: int = 0,
 ) -> None:
     """Marca el experimento como terminado (o fallido) y guarda su resumen."""
     with conexion() as con:
         con.execute(
             "UPDATE experimentos SET estado=?, duracion_s=?, resumen_json=?, "
-            "n_combinaciones=?, n_estrategias=? WHERE id=?",
-            (estado, duracion_s, a_json(resumen), n_comb, n_est, experimento_id),
+            "n_combinaciones=?, n_estrategias=?, espacio_total=? WHERE id=?",
+            (estado, duracion_s, a_json(resumen), n_comb, n_est, espacio_total, experimento_id),
         )
+
+
+def actualizar_resumen(experimento_id: int, resumen: dict) -> None:
+    """Sustituye el resumen de un experimento (p. ej. tras pasar el panel de agentes)."""
+    with conexion() as con:
+        con.execute("UPDATE experimentos SET resumen_json=? WHERE id=?", (a_json(resumen), experimento_id))
 
 
 def listar_experimentos() -> pd.DataFrame:
     """Todos los experimentos, del más reciente al más antiguo."""
     return consulta_df(
-        "SELECT id, nombre, creado, estado, n_combinaciones, n_estrategias, duracion_s, semilla, "
-        "resumen_json FROM experimentos ORDER BY id DESC"
+        "SELECT id, nombre, creado, estado, n_combinaciones, n_estrategias, espacio_total, "
+        "duracion_s, semilla, resumen_json FROM experimentos ORDER BY id DESC"
     )
 
 
@@ -215,9 +261,7 @@ def borrar_experimento(experimento_id: int) -> None:
 
 
 # ---------------------------------------------------------------- datos_meta
-def guardar_meta_datos(
-    activo: str, temporalidad: str, fuente: str, df: pd.DataFrame, calidad: dict, ruta: str
-) -> None:
+def guardar_meta_datos(activo: str, temporalidad: str, fuente: str, df: pd.DataFrame, calidad: dict, ruta: str) -> None:
     """Registra qué datos hay descargados y hasta qué fecha."""
     with conexion() as con:
         con.execute(

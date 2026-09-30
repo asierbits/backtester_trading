@@ -8,9 +8,13 @@ general:
   ruta_informes: informes
   nucleos: -1                 # -1 = usar todos los núcleos del ordenador
 
+interfaz:
+  tema_graficas: oscuro       # oscuro | claro
+
 datos:
-  fuente: binance             # binance | sintetico
+  fuente: binance             # binance | sintetico | yfinance | csv
   activos: [BTC/USDT, ETH/USDT, SOL/USDT, BNB/USDT, XRP/USDT]
+  acciones: [SPY, QQQ, AAPL, MSFT]   # Solo para la fuente yfinance
   temporalidades: [1h, 1d]    # También admite 4h
   desde: "2020-01-01"
   hasta: null                 # null = hasta hoy
@@ -20,18 +24,25 @@ backtest:
   capital_inicial: 1000.0     # Euros ficticios
   comision: 0.001             # 0,1 % por operación (entrada y salida)
   slippage: 0.0005            # 0,05 % de deslizamiento por ejecución
-  precio_ejecucion: apertura  # La señal de la vela t se ejecuta en la apertura de t+1
+  modo_slippage: fijo         # fijo | volatilidad | volumen
+  precio_ejecucion: apertura  # apertura: la señal de la vela t se ejecuta en la apertura de t+1 | cierre: en el cierre de t+1
+  permitir_cortos: false      # Fase 3: posiciones -1 (cortos) sin apalancamiento
+  sizing: completo            # completo (100 % del capital) | volatilidad (Fase 3)
+  volatilidad_objetivo: 0.5   # Volatilidad anual objetivo para el sizing por volatilidad (máx. 100 % del capital)
 
 experimento:
+  fuente: sintetico           # De dónde leer los datos del experimento: binance | sintetico | yfinance | csv
   temporalidad: 1d
   activos: [BTC/USDT, ETH/USDT, SOL/USDT, BNB/USDT, XRP/USDT]
+  desde: null                 # null = todos los datos disponibles
+  hasta: null
   max_estrategias: 5000       # Combinaciones de parámetros (cada una se prueba en cada activo)
-  familias: [cruce_medias, rsi_reversion, ruptura_donchian]
+  familias: [cruce_medias, rsi_reversion, ruptura_donchian, bollinger, macd, combinada]
   proporcion_train: 0.6
   n_aleatorias: 200           # Estrategias aleatorias de control por activo
-  top_finalistas: 10          # Cuántas pasan al agente crítico
+  top_finalistas: 10          # Cuántas pasan a la validación completa y al panel de agentes
 
-# Espacios de parámetros por familia (mín, máx, paso)
+# Espacios de parámetros por familia: [mín, máx, paso] para números, lista de textos para categorías
 parametros:
   cruce_medias:
     tipo_media: [sma, ema]
@@ -44,21 +55,56 @@ parametros:
   ruptura_donchian:
     entrada: [10, 100, 1]
     salida: [5, 50, 1]
+  bollinger:
+    periodo: [10, 50, 1]
+    desviaciones: [1.5, 3.0, 0.25]
+    modo: [reversion, ruptura]
+  macd:
+    rapida: [5, 20, 1]
+    lenta: [20, 60, 2]
+    senal: [5, 15, 1]
+  combinada:
+    bases: [cruce_medias, rsi_reversion, ruptura_donchian, bollinger, macd]
+    filtro: [100, 200, 50]    # Periodo de la SMA de tendencia (precio por encima = se permite entrar)
+
+validacion:
+  walk_forward_ventanas: 6        # Número de tramos fuera de muestra
+  walk_forward_candidatos: 150    # Combinaciones de la familia que se re-optimizan en cada ventana
+  walk_forward_min_rentables: 0.5 # Fracción mínima de ventanas fuera de muestra rentables
+  monte_carlo_simulaciones: 2000
+  monte_carlo_max_prob_perdida: 0.25  # Probabilidad máxima de acabar perdiendo (bootstrap de operaciones de test)
+  robustez_min_positivas: 0.7     # Fracción de vecinos (parámetros perturbados) que deben seguir con Sharpe > 0
+  robustez_min_ratio: 0.5         # El Sharpe mediano de los vecinos debe conservar al menos este % del original
+  multiplicador_costes: 2.0       # Prueba de estrés de costes
+  dsr_minimo: 0.95                # Deflated Sharpe Ratio mínimo (probabilidad de que el Sharpe real sea > 0)
+  alfa_bh: 0.05                   # Nivel de Benjamini-Hochberg
+  regimen_ventana_dias: 90        # Ventana para clasificar el mercado en alcista/bajista/lateral
+  regimen_umbral: 0.10            # ±10 % en la ventana = alcista/bajista
 
 veredicto:
-  min_operaciones: 30             # Menos operaciones = sin significancia → DESCARTADA
+  min_operaciones: 30             # Menos operaciones en entrenamiento = sin significancia → DESCARTADA
+  min_operaciones_test: 10        # Menos operaciones en test = no se puede validar → DESCARTADA
   max_degradacion_sharpe: 0.5     # El Sharpe de test debe conservar al menos el 50 % del de train
   percentil_aleatorias: 95        # Debe superar al percentil 95 de las estrategias aleatorias
-  exigir_validacion_completa: true  # Sin walk-forward/Monte Carlo/múltiples pruebas (Fase 2) nada pasa de SOSPECHOSA
+  exigir_validacion_completa: true  # Sin walk-forward/Monte Carlo/múltiples pruebas nada pasa de SOSPECHOSA
 
 agentes:
   activado: true
   modelo: claude-opus-5-5
-  esfuerzo: medium                # low | medium | high
-  max_tokens: 4000
+  esfuerzo: medium                # low | medium | high | xhigh | max
+  max_tokens: 8000
   concurrencia: 3
-  max_llamadas_por_experimento: 20
-  max_tokens_por_experimento: 200000
+  max_reintentos: 4
+  panel: [esceptico, gestor_riesgo, estadistico, realista, abogado_diablo]
+  arbitro: true
+  max_llamadas_por_experimento: 70
+  max_tokens_por_experimento: 600000
+  tokens_salida_estimados: 2500   # Para la estimación de coste previa
   precio_entrada_millon: 4.0      # $ por millón de tokens de entrada (para estimar coste)
   precio_salida_millon: 20.0
   usar_fallbacks: true            # Si el modelo rechaza la petición, la API reintenta con otro modelo
+
+paper:
+  fuente: binance                 # binance | sintetico (para probar sin conexión)
+  intervalo_minutos: 60           # Cada cuánto actualiza el bucle de paper trading
+  alertas: false                  # true = enviar alertas (Telegram/email) configuradas en .env

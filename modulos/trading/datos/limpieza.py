@@ -6,7 +6,6 @@ pero no se rellenan.
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 COLUMNAS = ["open", "high", "low", "close", "volume"]
@@ -21,13 +20,15 @@ def normalizar(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     if "timestamp" in df.columns:
         ts = df["timestamp"]
-        if np.issubdtype(ts.dtype, np.number):
+        if pd.api.types.is_numeric_dtype(ts):
             # Milisegundos (ccxt) o segundos (algunos CSV)
             unidad = "ms" if ts.max() > 1e11 else "s"
             df["timestamp"] = pd.to_datetime(ts, unit=unidad, utc=True)
         else:
             df["timestamp"] = pd.to_datetime(ts, utc=True)
         df = df.set_index("timestamp")
+    elif not isinstance(df.index, pd.DatetimeIndex):
+        raise ValueError("Falta la columna 'timestamp' (fecha u hora de cada vela).")
     elif df.index.tz is None:
         df.index = df.index.tz_localize("UTC")
     else:
@@ -39,9 +40,7 @@ def normalizar(df: pd.DataFrame) -> pd.DataFrame:
     return df[COLUMNAS].astype(float)
 
 
-def limpiar(
-    df: pd.DataFrame, temporalidad: str, salto_anomalo: float = 0.35
-) -> tuple[pd.DataFrame, dict]:
+def limpiar(df: pd.DataFrame, temporalidad: str, salto_anomalo: float = 0.35) -> tuple[pd.DataFrame, dict]:
     """Limpia las velas y devuelve (datos_limpios, informe_de_calidad).
 
     - Elimina duplicados (se queda con la última versión de cada vela).

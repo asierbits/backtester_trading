@@ -1,0 +1,9 @@
+[server]
+headless = true
+runOnSave = false
+
+[browser]
+gatherUsageStats = false
+
+# Tema: sin sección [theme] la app sigue al tema del sistema (claro/oscuro) y se puede
+# cambiar en el menú ⋮ → Settings. Las gráficas detectan el tema activo y lo siguen.
