@@ -89,7 +89,7 @@ veredicto:
   exigir_validacion_completa: true  # Sin walk-forward/Monte Carlo/múltiples pruebas nada pasa de SOSPECHOSA
 
 agentes:
-  activado: true
+  activado: false               # Panel de agentes de IA (necesita ANTHROPIC_API_KEY). Desactivado: todo lo demás funciona igual
   modelo: claude-opus-5-5
   esfuerzo: medium                # low | medium | high | xhigh | max
   max_tokens: 8000

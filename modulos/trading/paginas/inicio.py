@@ -64,8 +64,8 @@ if clave_anthropic():
         "Clave de Anthropic configurada: el panel de agentes críticos está disponible.", icon=":material/check_circle:"
     )
 else:
-    st.warning(
-        "No hay clave de Anthropic en `.env`: los experimentos funcionan igual, pero sin el panel de "
-        "agentes críticos. Puedes añadirla en **Ajustes**.",
-        icon=":material/key:",
+    st.info(
+        "Panel de agentes desactivado (opcional). El veredicto lo deciden las pruebas estadísticas, "
+        "que funcionan sin ninguna clave. Si algún día quieres las críticas de la IA, añade una clave en **Ajustes**.",
+        icon=":material/info:",
     )
