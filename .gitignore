@@ -1,0 +1,16 @@
+# Secretos
+.env
+
+# Entorno y cachés
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Datos e informes generados
+data/
+informes/*
+!informes/.gitkeep
+*.log
